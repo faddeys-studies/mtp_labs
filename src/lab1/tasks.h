@@ -183,14 +183,15 @@ protected:
 class RowWriter : public mt::Task {
     const std::string& filename;
     const size_t _nRows;
+    const bool _progress;
 
     const RowBuffer *_readFromBuffer;
     std::ofstream *_outFile;
     size_t _wroteRows;
 
 public:
-    RowWriter(const std::string& filename, const size_t nRows)
-            : filename(filename), _nRows(nRows) {}
+    RowWriter(const std::string& filename, const size_t nRows, bool progress=false)
+            : filename(filename), _nRows(nRows), _progress(progress) {}
 
 protected:
 
@@ -214,10 +215,12 @@ protected:
         *_outFile << std::endl;
         _readFromBuffer->readDone();
         _wroteRows++;
-        if (_wroteRows > 1) std::cout << '\r';
-        std::cout << _wroteRows << '/' << _nRows;
-        if (_wroteRows >= _nRows) std::cout << std::endl;
-        std::cout.flush();
+        if (_progress) {
+            if (_wroteRows > 1) std::cout << '\r';
+            std::cout << _wroteRows << '/' << _nRows;
+            if (_wroteRows >= _nRows) std::cout << std::endl;
+            std::cout.flush();
+        }
         return _wroteRows >= _nRows;
     }
 

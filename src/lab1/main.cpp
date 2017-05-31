@@ -30,6 +30,7 @@ int main(int argc, char **argv) {
             .param("rows", "-r", "", "Number of rows")
             .param("cols", "-c", "", "Number of columns")
             .param("out-name", "-o", "", "Output file name")
+            .flag("progress", "-pr", "Display progress")
             .positional("in-names", "+");
     auto args = parser.parse(argc, argv);
     unsigned nWorkers = getPositive(args, parser, "n-threads");
