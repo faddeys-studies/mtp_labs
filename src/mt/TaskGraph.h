@@ -19,10 +19,13 @@ public:
 
 private:
 
+    enum CallStatus { NO, YES, WILL_NOW };
+
     class TaskState {
     public:
-        // turns into true before calling start() and first runPortion()
-        bool started = false;
+        // turns into WILL_NOW before calling start()
+        // then turns into YES after calling start() in non-synchronized context
+        CallStatus started = NO;
 
         // turns into true before each runPortion()
         // turns into false after each runPortion()
@@ -55,7 +58,7 @@ private:
                 , dependencies(dependencies)
                 , nDependenciesNotStarted(dependencies.size()) {}
         void reset() {
-            started = false;
+            started = NO;
             finished = false;
             deallocated = false;
             runsNow = false;
@@ -67,6 +70,7 @@ private:
     void _workerThread();
     int _startNextPortion();
     void _portionDone(int taskId, bool done);
+    bool _callStartIfNeeded(int taskId);
 
     std::vector<TaskState> _tasks;
     std::mutex _mtxTasks;

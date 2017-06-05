@@ -21,14 +21,21 @@ public:
     }
     int getId() const { return id; }
 
-    void start(const std::vector<Task*>& dependencies) {
+    bool start(const std::vector<Task*>& dependencies) {
         _workMtx.lock();
-        doStart(dependencies);
+        _done = false;
+        return doStart(dependencies);
     }
     bool runPortion() {
-        _portionMtx.lock();
-        bool done = doWorkPortion();
-        _portionMtx.unlock();
+        bool done;
+        {
+            std::unique_lock<std::mutex> _lock{_portionMtx};
+            done = doWorkPortion();
+        }
+        {
+            std::unique_lock<std::mutex> _lock{_doneMtx};
+            _done = done;
+        }
         return done;
     }
     void deallocateResources() {
@@ -37,16 +44,21 @@ public:
     }
     virtual bool isWaiting() = 0;
 
+    bool isDone() {
+        std::unique_lock<std::mutex> _lock{_doneMtx};
+        return _done;
+    }
+
 protected:
-    virtual void doStart(const std::vector<Task*>& dependencies) {}
+    virtual bool doStart(const std::vector<Task*>& dependencies) { return true; }
     virtual bool doWorkPortion() = 0;
     virtual void doFinalize() {}
 
 private:
     bool idWasSet = false;
     int id = -1;
-    std::mutex _workMtx;
-    std::mutex _portionMtx;
+    bool _done = false;
+    std::mutex _workMtx, _portionMtx, _doneMtx;
 
 };
 
