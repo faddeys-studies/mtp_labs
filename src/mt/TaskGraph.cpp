@@ -5,13 +5,9 @@
 //#define TASK_GRAPH_DEBUGGING
 
 #ifdef TASK_GRAPH_DEBUGGING
-#include <iostream>
+#include "../common.h"
 #include <sstream>
-std::mutex _cerr_mutex;
-#define tg_debug(args) {\
-    std::unique_lock<std::mutex> _lk{_cerr_mutex}; \
-    std::cerr << std::this_thread::get_id() << ": " << args << std::endl; \
-}
+#define tg_debug(args) debug(args)
 #else
 #define tg_debug(args)
 #endif
@@ -184,7 +180,7 @@ bool mt::TaskGraph::_callStartIfNeeded(int taskId) {
     bool needToCall;
     TaskState *state;
     std::vector<Task*> deps;
-    bool canGoNow = true; 
+    bool canGoNow = true;
     {
         std::unique_lock<std::mutex> _lock{_mtxTasks};
         state = &_tasks[taskId];
