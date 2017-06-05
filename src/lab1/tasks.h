@@ -12,11 +12,21 @@
 
 namespace lab1 {
 
+//#define LAB1_DEBUG
+
+#ifdef LAB1_DEBUG
+#include "../common.h"
+#define lab1_debug(args) debug(args)
+#else
+#define lab1_debug(args)
+#endif
 
 
 class RowBuffer {
-    std::vector<float> _data;
+    const size_t _size;
     int _version;
+    mutable bool _allocateDone = false;
+    mutable std::vector<float> _data;
     mutable bool _wasRead;
     mutable std::mutex _mtx;
 
@@ -25,14 +35,23 @@ public:
     typedef std::vector<float>::iterator write_ptr;
 
     RowBuffer(size_t size)
-            : _data(size, 0)
+            : _size(size)
+//            , _data()
+            , _data(size, 0)
+            , _allocateDone(true)
             , _version(0)
             , _wasRead(true)
             , _mtx()
     {}
 
-    read_ptr reader() const { return _data.cbegin(); }
-    read_ptr end() const { return  _data.cend(); }
+    read_ptr reader() const {
+        ensureAllocated();
+        return _data.cbegin();
+    }
+    read_ptr end() const {
+        ensureAllocated();
+        return  _data.cend();
+    }
     void readDone() const {
         std::unique_lock<std::mutex> _lock{_mtx};
         _wasRead = true;
@@ -44,16 +63,37 @@ public:
     int version() const { return _version; }
 
     void swap(RowBuffer *other) {
+        // NOTE: perform this BEFORE locking, since these ops are also synchronized
+        ensureAllocated();
+        other->ensureAllocated();
+
         std::unique_lock<std::mutex> _lock{_mtx};
         std::unique_lock<std::mutex> _othersLock{other->_mtx};
+
         if (_data.size() != other->_data.size())
             throw std::runtime_error("Cannot swap buffers of different size");
         _data.swap(other->_data);
         _version++;
         _wasRead = false;
     }
-    write_ptr writer() { return _data.begin(); }
-    write_ptr end() { return  _data.end(); }
+    write_ptr writer() {
+        ensureAllocated();
+        return _data.begin();
+    }
+    write_ptr end() {
+        ensureAllocated();
+        return  _data.end();
+    }
+
+private:
+
+    void ensureAllocated() const {
+//        std::unique_lock<std::mutex> _lock{_mtx};
+//        if (!_allocateDone) {
+//            _data.resize(_size, 0);
+//            _allocateDone = true;
+//        }
+    }
 
 };
 
@@ -70,10 +110,11 @@ protected:
     size_t _nRowsProduced;
     const size_t _nRows, _nCols;
 
-    virtual void doStart(const std::vector<mt::Task*>& dependencies) override {
+    virtual bool doStart(const std::vector<mt::Task*>& dependencies) override {
         prepareInternalBuffers(dependencies);
         _outBuffer = new RowBuffer(_nCols);
         _nRowsProduced = 0;
+        return false;
     }
 
     virtual bool isWaiting() override {
@@ -128,9 +169,11 @@ protected:
         return true;
     }
     virtual RowBuffer* getNextBuffer() override {
+        lab1_debug("start read #" << _nRowsProduced+1 << " by " << getId());
         for(auto it = _readBuffer->writer(); it != _readBuffer->end(); it++) {
             *_inFile >> *it;
         }
+        lab1_debug("done  read #" << _nRowsProduced+1 << " by " << getId());
         return _readBuffer;
     }
 };
@@ -138,42 +181,53 @@ protected:
 
 class RowAdder : public RowProducer {
     RowBuffer *_sumBuffer;
-    const RowBuffer *_summand1Buffer, *_summand2Buffer;
+    const RowProducer *_summand1Prod, *_summand2Prod;
 
 public:
     RowAdder(size_t nRows, size_t nCols)
             : RowProducer(nRows, nCols) {}
 
 protected:
+
+    virtual bool isWaiting() override {
+        if (_summand1Prod->getOutBuffer() == nullptr ||
+                _summand2Prod->getOutBuffer() == nullptr) {
+            return true;
+        }
+        return RowProducer::isWaiting();
+    }
+
     virtual void prepareInternalBuffers(const std::vector<mt::Task *> &dependencies) override {
         assert(dependencies.size() == 2);
-        RowProducer *prod1 = dynamic_cast<RowProducer*>(dependencies[0]);
-        RowProducer *prod2 = dynamic_cast<RowProducer*>(dependencies[1]);
-        assert(prod1 != nullptr);
-        assert(prod2 != nullptr);
+        _summand1Prod = dynamic_cast<RowProducer*>(dependencies[0]);
+        _summand2Prod = dynamic_cast<RowProducer*>(dependencies[1]);
+        assert(_summand1Prod != nullptr);
+        assert(_summand2Prod != nullptr);
 
         _sumBuffer = new RowBuffer(_nCols);
-        _summand1Buffer = prod1->getOutBuffer();
-        _summand2Buffer = prod2->getOutBuffer();
     }
     virtual void destroyInternalBuffers() override {
         delete _sumBuffer;
-        _summand1Buffer = nullptr;
-        _summand2Buffer = nullptr;
+        _summand1Prod = nullptr;
+        _summand2Prod = nullptr;
     }
     virtual bool hasNextBuffer() override {
-        return !_summand1Buffer->wasRead() && !_summand2Buffer->wasRead();
+        return !_summand1Prod->getOutBuffer()->wasRead() && !_summand2Prod->getOutBuffer()->wasRead();
     }
     virtual RowBuffer* getNextBuffer() override {
+        lab1_debug("start sum  #" << _nRowsProduced+1 << " by " << getId()
+                   << " from " << _summand1Prod->getId() << " and " << _summand2Prod->getId());
         auto sum = _sumBuffer->writer();
-        auto summand1 = _summand1Buffer->reader(),
-             summand2 = _summand2Buffer->reader();
+        auto summand1 = _summand1Prod->getOutBuffer()->reader(),
+             summand2 = _summand2Prod->getOutBuffer()->reader();
         while(sum != _sumBuffer->end()) {
             *sum = *summand1 + *summand2;
             ++sum; ++summand1; ++summand2;
         }
-        _summand1Buffer->readDone();
-        _summand2Buffer->readDone();
+        _summand1Prod->getOutBuffer()->readDone();
+        _summand2Prod->getOutBuffer()->readDone();
+        lab1_debug("done  sum  #" << _nRowsProduced+1 << " by " << getId()
+                   << " from " << _summand1Prod->getId() << " and " << _summand2Prod->getId());
         return _sumBuffer;
     }
 
@@ -185,7 +239,7 @@ class RowWriter : public mt::Task {
     const size_t _nRows;
     const bool _progress;
 
-    const RowBuffer *_readFromBuffer;
+    const RowProducer *_sourceProducer;
     std::ofstream *_outFile;
     size_t _wroteRows;
 
@@ -195,25 +249,27 @@ public:
 
 protected:
 
-    virtual void doStart(const std::vector<mt::Task*> &dependencies) override {
+    virtual bool doStart(const std::vector<mt::Task*> &dependencies) override {
         assert(dependencies.size() == 1);
-        RowProducer *producer = dynamic_cast<RowProducer*>(dependencies[0]);
-        assert(producer != nullptr);
-        _readFromBuffer = producer->getOutBuffer();
+        _sourceProducer = dynamic_cast<RowProducer*>(dependencies[0]);
+        assert(_sourceProducer != nullptr);
         _outFile = new std::ofstream(filename);
         _wroteRows = 0;
+        return false;
     }
 
     virtual bool isWaiting() override {
-        return _readFromBuffer->wasRead();
+        if (_sourceProducer->getOutBuffer() == nullptr) return true;
+        return _sourceProducer->getOutBuffer()->wasRead();
     }
 
     virtual bool doWorkPortion() override {
-        for(auto it = _readFromBuffer->reader(); it != _readFromBuffer->end(); it++) {
+        auto src = _sourceProducer->getOutBuffer();
+        for(auto it = src->reader(); it != src->end(); it++) {
             *_outFile << *it << ' ';
         }
         *_outFile << std::endl;
-        _readFromBuffer->readDone();
+        src->readDone();
         _wroteRows++;
         if (_progress) {
             if (_wroteRows > 1) std::cout << '\r';
@@ -221,11 +277,12 @@ protected:
             if (_wroteRows >= _nRows) std::cout << std::endl;
             std::cout.flush();
         }
+        lab1_debug("wrote row #" << _wroteRows);
         return _wroteRows >= _nRows;
     }
 
     virtual void doFinalize() override {
-        _readFromBuffer = nullptr;
+        _sourceProducer = nullptr;
         _outFile->close();
         delete _outFile;
     }
