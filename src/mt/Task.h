@@ -44,7 +44,7 @@ public:
     }
     virtual bool isWaiting() = 0;
 
-    bool isDone() {
+    bool isDone() const {
         std::unique_lock<std::mutex> _lock{_doneMtx};
         return _done;
     }
@@ -58,7 +58,7 @@ private:
     bool idWasSet = false;
     int id = -1;
     bool _done = false;
-    std::mutex _workMtx, _portionMtx, _doneMtx;
+    mutable std::mutex _workMtx, _portionMtx, _doneMtx;
 
 };
 

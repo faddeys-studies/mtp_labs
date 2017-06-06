@@ -122,7 +122,6 @@ int mt::TaskGraph::_startNextPortion() {
                         if (_tasks[i].nDependenciesNotStarted == 0) {
                             _hasReadyTasks.notify_all();
                         }
-                        break;
                     }
                 }
             }
